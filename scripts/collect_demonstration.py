@@ -18,8 +18,64 @@ import libero.libero.envs.bddl_utils as BDDLUtils
 from libero.libero.envs import *
 
 
+DEFAULT_RENDER_WINDOW_NAME = "offscreen render"
+
+
+class TeleopRuntime:
+    def __init__(self):
+        self.stop_requested = False
+
+
+def set_render_window_title(window_title):
+    if not window_title:
+        return
+    try:
+        cv2.setWindowTitle(DEFAULT_RENDER_WINDOW_NAME, window_title)
+    except cv2.error:
+        pass
+
+
+def make_keypress_callback(device, runtime):
+    def on_keypress(key):
+        if key == 27:
+            runtime.stop_requested = True
+            return
+        device.on_press(key)
+
+    return on_keypress
+
+
+def add_keyboard_callbacks(viewer, device):
+    runtime = TeleopRuntime()
+    keypress_callback = make_keypress_callback(device, runtime)
+    try:
+        viewer.add_keypress_callback("any", keypress_callback)
+    except TypeError:
+        viewer.add_keypress_callback(keypress_callback)
+
+    for method_name, callback in (
+        ("add_keyup_callback", device.on_release),
+        ("add_keyrepeat_callback", device.on_press),
+    ):
+        method = getattr(viewer, method_name, None)
+        if method is None:
+            continue
+        try:
+            method("any", callback)
+        except TypeError:
+            method(callback)
+    return runtime
+
+
 def collect_human_trajectory(
-    env, device, arm, env_configuration, problem_info, remove_directory=[]
+    env,
+    device,
+    arm,
+    env_configuration,
+    problem_info,
+    remove_directory=[],
+    runtime=None,
+    window_title=None,
 ):
     """
     Use the device (keyboard or SpaceNav 3D mouse) to collect a demonstration.
@@ -43,6 +99,7 @@ def collect_human_trajectory(
 
     # ID = 2 always corresponds to agentview
     env.render()
+    set_render_window_title(window_title)
 
     task_completion_hold_count = (
         -1
@@ -54,6 +111,10 @@ def collect_human_trajectory(
     count = 0
 
     while True:
+        if runtime is not None and runtime.stop_requested:
+            saving = False
+            break
+
         count += 1
         # Set active robot
         active_robot = (
@@ -80,6 +141,10 @@ def collect_human_trajectory(
 
         env.step(action)
         env.render()
+        set_render_window_title(window_title)
+        if runtime is not None and runtime.stop_requested:
+            saving = False
+            break
         # Also break if we complete the task
         if task_completion_hold_count == 0:
             break
@@ -98,7 +163,7 @@ def collect_human_trajectory(
     if not saving:
         remove_directory.append(env.ep_directory.split("/")[-1])
     env.close()
-    return saving
+    return saving, bool(runtime is not None and runtime.stop_requested)
 
 
 def gather_demonstrations_as_hdf5(
@@ -205,7 +270,7 @@ if __name__ == "__main__":
         "--robots",
         nargs="+",
         type=str,
-        default="Panda",
+        default=["Panda"],
         help="Which robot(s) to use in the env",
     )
     parser.add_argument(
@@ -252,6 +317,12 @@ if __name__ == "__main__":
         help="How much to scale rotation user inputs",
     )
     parser.add_argument("--bddl-file", type=str)
+    parser.add_argument(
+        "--window-title",
+        type=str,
+        default=None,
+        help="Title shown on the OpenCV render window",
+    )
 
     parser.add_argument("--vendor-id", type=int, default=9583)
     parser.add_argument("--product-id", type=int, default=50734)
@@ -275,6 +346,7 @@ if __name__ == "__main__":
     problem_name = problem_info["problem_name"]
     domain_name = problem_info["domain_name"]
     language_instruction = problem_info["language_instruction"]
+    window_title = args.window_title or f"LIBERO Teleop - {language_instruction}"
     if "TwoArm" in problem_name:
         config["env_configuration"] = args.config
     print(language_instruction)
@@ -312,12 +384,11 @@ if __name__ == "__main__":
         device = Keyboard(
             pos_sensitivity=args.pos_sensitivity, rot_sensitivity=args.rot_sensitivity
         )
-        env.viewer.add_keypress_callback("any", device.on_press)
-        env.viewer.add_keyup_callback("any", device.on_release)
-        env.viewer.add_keyrepeat_callback("any", device.on_press)
+        runtime = add_keyboard_callbacks(env.viewer, device)
     elif args.device == "spacemouse":
         from robosuite.devices import SpaceMouse
 
+        runtime = TeleopRuntime()
         device = SpaceMouse(
             args.vendor_id,
             args.product_id,
@@ -345,9 +416,19 @@ if __name__ == "__main__":
     i = 0
     while i < args.num_demonstration:
         print(i)
-        saving = collect_human_trajectory(
-            env, device, args.arm, args.config, problem_info, remove_directory
+        saving, stop_requested = collect_human_trajectory(
+            env,
+            device,
+            args.arm,
+            args.config,
+            problem_info,
+            remove_directory,
+            runtime,
+            window_title,
         )
+        if stop_requested:
+            print("Stopping collection and closing the render window.")
+            break
         if saving:
             print(remove_directory)
             gather_demonstrations_as_hdf5(

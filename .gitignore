@@ -13,6 +13,12 @@ gpt/
 bert/
 logs/
 
+data/
+demonstration_data/
+demonstration_data_debug/
+demonstration_data_reverse/
 *.mp4
+*.hdf5
 libero.egg-info/
 .vscode/
+demo*/

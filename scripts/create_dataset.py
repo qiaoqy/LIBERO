@@ -13,6 +13,7 @@ import libero.libero.utils.utils as libero_utils
 import cv2
 from PIL import Image
 from robosuite.utils import camera_utils
+from collect_reverse_demo0 import postprocess_official_model_xml
 
 from libero.libero.envs import *
 from libero.libero import get_libero_path
@@ -36,6 +37,12 @@ def main():
         "--dataset-name",
         type=str,
         default="training_set",
+    )
+    parser.add_argument(
+        "--output-file",
+        type=str,
+        default=None,
+        help="Optional explicit output HDF5 path. Use this to avoid overwriting the default LIBERO dataset path.",
     )
 
     parser.add_argument("--no-proprio", action="store_true")
@@ -67,7 +74,10 @@ def main():
     bddl_file_dir = os.path.dirname(bddl_file_name)
     replace_bddl_prefix = "/".join(bddl_file_dir.split("bddl_files/")[:-1] + "bddl_files")
 
-    hdf5_path = os.path.join(get_libero_path("datasets"), bddl_file_dir.split("bddl_files/")[-1].replace(".bddl", "_demo.hdf5"))
+    if args.output_file:
+        hdf5_path = args.output_file
+    else:
+        hdf5_path = os.path.join(get_libero_path("datasets"), bddl_file_dir.split("bddl_files/")[-1].replace(".bddl", "_demo.hdf5"))
 
     output_parent_dir = Path(hdf5_path).parent
     output_parent_dir.mkdir(parents=True, exist_ok=True)
@@ -136,7 +146,7 @@ def main():
             except:
                 continue
 
-        model_xml = libero_utils.postprocess_model_xml(model_xml, {})
+        model_xml = postprocess_official_model_xml(model_xml)
 
         if not args.use_camera_obs:
             env.viewer.set_camera(0)
