@@ -19,6 +19,7 @@ from libero.libero.envs import TASK_MAPPING
 from collect_reverse_demo0 import (
     DEFAULT_REVERSE_LANGUAGE,
     ReverseTeleopRuntime,
+    SUPPORTED_DEVICES,
     add_gamepad_args,
     add_keyboard_callbacks,
     collect_reverse_human_trajectory,
@@ -166,7 +167,7 @@ def parse_args():
     parser.add_argument("--arm", type=str, default="right")
     parser.add_argument("--camera", type=str, default="agentview")
     parser.add_argument("--controller", type=str, default="OSC_POSE")
-    parser.add_argument("--device", type=str, default="keyboard")
+    parser.add_argument("--device", type=str, default="auto", choices=SUPPORTED_DEVICES)
     parser.add_argument("--pos-sensitivity", type=float, default=1.5)
     parser.add_argument("--rot-sensitivity", type=float, default=1.0)
     parser.add_argument("--demo-index-start", type=int, default=0)
@@ -200,8 +201,8 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.device not in ("keyboard", "gamepad"):
-        raise ValueError("collect_reverse_demonstrations.py currently supports --device keyboard or --device gamepad")
+    if args.device not in SUPPORTED_DEVICES:
+        raise ValueError(f"collect_reverse_demonstrations.py currently supports --device {SUPPORTED_DEVICES}")
     if len(args.save_key) != 1:
         raise ValueError("--save-key must be a single character")
     if args.demo_index_start > args.demo_index_end:

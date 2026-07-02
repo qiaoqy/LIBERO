@@ -24,6 +24,65 @@ from libero.libero.envs import TASK_MAPPING
 DEFAULT_RENDER_WINDOW_NAME = "offscreen render"
 DEFAULT_SOURCE_DEMO = "demo_0"
 DEFAULT_REVERSE_LANGUAGE = "restore the microwave to the initial open state"
+SUPPORTED_DEVICES = ("auto", "keyboard", "gamepad", "ps5", "xbox")
+
+
+GAMEPAD_PROFILES = {
+    "ps5": {
+        "display_name": "PS5",
+        "name_markers": ("dualsense", "dualshock", "playstation", "ps5"),
+        "exact_names": ("wireless controller",),
+        "axis_left_x": 0,
+        "axis_left_y": 1,
+        "axis_right_x": 2,
+        "axis_right_y": 3,
+        "button_gripper": 3,
+        "button_rotate_modifier": 1,
+        "button_save_discard": 2,
+        "button_undo_last": 0,
+        "button_reset": 6,
+        "button_stop": 4,
+        "labels": {
+            "gripper": "Triangle",
+            "rotate_modifier": "Circle",
+            "save_discard": "Square",
+            "undo_last": "Cross",
+            "reset": "Options",
+            "stop": "Share",
+        },
+    },
+    "xbox": {
+        "display_name": "Xbox",
+        "name_markers": (
+            "controller (xbox one for windows)",
+            "xbox one for windows",
+            "xbox wireless controller",
+            "xbox 360 controller",
+            "xinput controller",
+            "gamesir g7",
+            "gamesir",
+        ),
+        "exact_names": (),
+        "axis_left_x": 0,
+        "axis_left_y": 1,
+        "axis_right_x": 3,
+        "axis_right_y": 4,
+        "button_gripper": 3,
+        "button_rotate_modifier": 1,
+        "button_save_discard": 2,
+        "button_undo_last": 0,
+        "button_reset": 7,
+        "button_stop": 6,
+        "labels": {
+            "gripper": "Y",
+            "rotate_modifier": "B",
+            "save_discard": "X",
+            "undo_last": "A",
+            "reset": "Menu",
+            "stop": "View",
+        },
+    },
+}
 
 
 class ReverseTeleopRuntime:
@@ -100,38 +159,153 @@ class ManualSaveKeyboard:
         )
 
 
+def normalize_gamepad_name(name):
+    return " ".join(name.lower().replace("-", " ").split())
+
+
+def classify_gamepad(gamepad):
+    normalized_name = normalize_gamepad_name(gamepad["name"])
+    for profile_name in ("xbox", "ps5"):
+        profile = GAMEPAD_PROFILES[profile_name]
+        if normalized_name in profile["exact_names"]:
+            return profile_name
+        if any(marker in normalized_name for marker in profile["name_markers"]):
+            return profile_name
+    return None
+
+
+def import_pygame(required):
+    try:
+        import pygame
+    except ImportError as exc:
+        if required:
+            raise ImportError("pygame is required for gamepad teleop. Install it with: python -m pip install pygame") from exc
+        print("pygame is not installed; falling back to keyboard control.")
+        return None
+
+    pygame.init()
+    pygame.joystick.init()
+    return pygame
+
+
+def discover_gamepads(pygame):
+    gamepads = []
+    for joystick_index in range(pygame.joystick.get_count()):
+        joystick = pygame.joystick.Joystick(joystick_index)
+        joystick.init()
+        gamepad = {
+            "index": joystick_index,
+            "name": joystick.get_name(),
+            "guid": getattr(joystick, "get_guid", lambda: "")(),
+            "axes": joystick.get_numaxes(),
+            "buttons": joystick.get_numbuttons(),
+            "hats": joystick.get_numhats(),
+        }
+        gamepad["profile"] = classify_gamepad(gamepad)
+        gamepads.append(gamepad)
+    return gamepads
+
+
+def print_discovered_gamepads(gamepads):
+    if not gamepads:
+        return
+    print("Detected gamepads:")
+    for gamepad in gamepads:
+        profile = gamepad["profile"] or "unknown"
+        print(
+            f"  [{gamepad['index']}] {gamepad['name']} "
+            f"profile={profile} axes={gamepad['axes']} buttons={gamepad['buttons']} "
+            f"hats={gamepad['hats']} guid={gamepad['guid']}"
+        )
+
+
+def choose_gamepad(args, pygame, requested_device):
+    gamepads = discover_gamepads(pygame)
+    print_discovered_gamepads(gamepads)
+    if not gamepads:
+        if requested_device == "auto":
+            print("No gamepad detected; falling back to keyboard control.")
+            return None
+        raise RuntimeError("No gamepad detected by pygame. Connect the controller and check Windows game controller settings.")
+
+    if args.gamepad_index is not None:
+        matching = [gamepad for gamepad in gamepads if gamepad["index"] == args.gamepad_index]
+        if not matching:
+            raise ValueError(f"--gamepad-index {args.gamepad_index} is out of range; pygame detected {len(gamepads)} joystick(s).")
+        selected = matching[0]
+        if args.gamepad_profile != "auto":
+            profile_name = args.gamepad_profile
+        elif requested_device in GAMEPAD_PROFILES:
+            profile_name = requested_device
+        else:
+            profile_name = selected["profile"]
+        if profile_name is None:
+            profile_name = requested_device if requested_device in GAMEPAD_PROFILES else "ps5"
+        return selected["index"], profile_name
+
+    requested_profile = None
+    if requested_device in GAMEPAD_PROFILES:
+        requested_profile = requested_device
+    elif args.gamepad_profile != "auto":
+        requested_profile = args.gamepad_profile
+
+    if requested_profile is not None:
+        for gamepad in gamepads:
+            if gamepad["profile"] == requested_profile:
+                return gamepad["index"], requested_profile
+        if requested_device == "auto":
+            print(f"No {GAMEPAD_PROFILES[requested_profile]['display_name']} gamepad detected; falling back to keyboard control.")
+            return None
+        raise RuntimeError(f"No {GAMEPAD_PROFILES[requested_profile]['display_name']} gamepad detected by pygame.")
+
+    for preferred_profile in ("xbox", "ps5"):
+        for gamepad in gamepads:
+            if gamepad["profile"] == preferred_profile:
+                return gamepad["index"], preferred_profile
+
+    if requested_device == "auto":
+        print("No supported Xbox or PS5 gamepad detected; falling back to keyboard control.")
+        return None
+
+    print("No supported gamepad profile was detected; using the first joystick with PS5-compatible mapping.")
+    return gamepads[0]["index"], "ps5"
+
+
+def get_gamepad_profile_defaults(profile_name, joystick):
+    profile = dict(GAMEPAD_PROFILES[profile_name])
+    if profile_name == "xbox" and joystick.get_numaxes() <= 4:
+        profile["axis_right_x"] = 2
+        profile["axis_right_y"] = 3
+    return profile
+
+
+def arg_or_default(value, default):
+    return default if value is None else value
+
+
 class GamepadDevice:
-    def __init__(self, runtime, args):
-        try:
-            import pygame
-        except ImportError as exc:
-            raise ImportError("pygame is required for --device gamepad. Install it with: python -m pip install pygame") from exc
-
+    def __init__(self, runtime, args, pygame, joystick_index, profile_name):
         self.pygame = pygame
-        pygame.init()
-        pygame.joystick.init()
-        joystick_count = pygame.joystick.get_count()
-        if joystick_count == 0:
-            raise RuntimeError("No gamepad detected by pygame. Connect the controller and check Windows game controller settings.")
-        if args.gamepad_index >= joystick_count:
-            raise ValueError(f"--gamepad-index {args.gamepad_index} is out of range; pygame detected {joystick_count} joystick(s).")
-
-        self.joystick = pygame.joystick.Joystick(args.gamepad_index)
+        self.joystick = pygame.joystick.Joystick(joystick_index)
         self.joystick.init()
+        profile = get_gamepad_profile_defaults(profile_name, self.joystick)
         self.runtime = runtime
+        self.profile_name = profile_name
+        self.profile_display_name = profile["display_name"]
+        self.labels = profile["labels"]
         self.deadzone = args.gamepad_deadzone
         self.pos_step = args.gamepad_pos_step * args.pos_sensitivity
         self.rot_step = args.gamepad_rot_step * args.rot_sensitivity
-        self.axis_left_x = args.gamepad_axis_left_x
-        self.axis_left_y = args.gamepad_axis_left_y
-        self.axis_right_x = args.gamepad_axis_right_x
-        self.axis_right_y = args.gamepad_axis_right_y
-        self.button_gripper = args.gamepad_button_gripper
-        self.button_rotate_modifier = args.gamepad_button_rotate_modifier
-        self.button_save_discard = args.gamepad_button_save_discard
-        self.button_undo_last = args.gamepad_button_undo_last
-        self.button_reset = args.gamepad_button_reset
-        self.button_stop = args.gamepad_button_stop
+        self.axis_left_x = arg_or_default(args.gamepad_axis_left_x, profile["axis_left_x"])
+        self.axis_left_y = arg_or_default(args.gamepad_axis_left_y, profile["axis_left_y"])
+        self.axis_right_x = arg_or_default(args.gamepad_axis_right_x, profile["axis_right_x"])
+        self.axis_right_y = arg_or_default(args.gamepad_axis_right_y, profile["axis_right_y"])
+        self.button_gripper = arg_or_default(args.gamepad_button_gripper, profile["button_gripper"])
+        self.button_rotate_modifier = arg_or_default(args.gamepad_button_rotate_modifier, profile["button_rotate_modifier"])
+        self.button_save_discard = arg_or_default(args.gamepad_button_save_discard, profile["button_save_discard"])
+        self.button_undo_last = arg_or_default(args.gamepad_button_undo_last, profile["button_undo_last"])
+        self.button_reset = arg_or_default(args.gamepad_button_reset, profile["button_reset"])
+        self.button_stop = arg_or_default(args.gamepad_button_stop, profile["button_stop"])
         self.square_long_press_seconds = args.gamepad_square_long_press_seconds
         self.grasp = False
         self.reset = 0
@@ -139,9 +313,21 @@ class GamepadDevice:
         self.button_press_times = {}
         self.square_long_press_active = False
 
-        print(f"Gamepad: {self.joystick.get_name()}")
+        print(f"Selected {self.profile_display_name} gamepad: [{joystick_index}] {self.joystick.get_name()}")
         print(f"Gamepad axes={self.joystick.get_numaxes()} buttons={self.joystick.get_numbuttons()} hats={self.joystick.get_numhats()}")
-        print("Default mapping: left stick xy -> translation xy, right stick y -> z, hold Circle for rotation, Triangle -> gripper, Square short -> save, Square long -> discard/reset, Cross -> undo last saved, Options -> reset, Share -> stop.")
+        print(
+            "Mapping: left stick xy -> translation xy, right stick y -> z, "
+            f"hold {self.labels['rotate_modifier']} for rotation, {self.labels['gripper']} -> gripper, "
+            f"{self.labels['save_discard']} short -> save, {self.labels['save_discard']} long -> discard/reset, "
+            f"{self.labels['undo_last']} -> undo last saved, {self.labels['reset']} -> reset, {self.labels['stop']} -> stop."
+        )
+
+    def controls_message(self, save_key):
+        return (
+            f"Use {self.profile_display_name} gamepad teleop to restore the scene. "
+            f"{self.labels['save_discard']} short saves, {self.labels['save_discard']} long discards/resets, "
+            f"{self.labels['reset']} resets, {self.labels['stop']} stops. Keyboard '{save_key}' also saves, q discards, ESC quits."
+        )
 
     def start_control(self):
         self.reset = 0
@@ -293,20 +479,21 @@ class GamepadDevice:
 
 
 def add_gamepad_args(parser):
-    parser.add_argument("--gamepad-index", type=int, default=0)
+    parser.add_argument("--gamepad-index", type=int, default=None)
+    parser.add_argument("--gamepad-profile", choices=("auto", "ps5", "xbox"), default="auto")
     parser.add_argument("--gamepad-deadzone", type=float, default=0.08)
     parser.add_argument("--gamepad-pos-step", type=float, default=0.01)
     parser.add_argument("--gamepad-rot-step", type=float, default=0.01)
-    parser.add_argument("--gamepad-axis-left-x", type=int, default=0)
-    parser.add_argument("--gamepad-axis-left-y", type=int, default=1)
-    parser.add_argument("--gamepad-axis-right-x", type=int, default=2)
-    parser.add_argument("--gamepad-axis-right-y", type=int, default=3)
-    parser.add_argument("--gamepad-button-gripper", type=int, default=3)
-    parser.add_argument("--gamepad-button-rotate-modifier", type=int, default=1)
-    parser.add_argument("--gamepad-button-save-discard", type=int, default=2)
-    parser.add_argument("--gamepad-button-undo-last", type=int, default=0)
-    parser.add_argument("--gamepad-button-reset", type=int, default=6)
-    parser.add_argument("--gamepad-button-stop", type=int, default=4)
+    parser.add_argument("--gamepad-axis-left-x", type=int, default=None)
+    parser.add_argument("--gamepad-axis-left-y", type=int, default=None)
+    parser.add_argument("--gamepad-axis-right-x", type=int, default=None)
+    parser.add_argument("--gamepad-axis-right-y", type=int, default=None)
+    parser.add_argument("--gamepad-button-gripper", type=int, default=None)
+    parser.add_argument("--gamepad-button-rotate-modifier", type=int, default=None)
+    parser.add_argument("--gamepad-button-save-discard", type=int, default=None)
+    parser.add_argument("--gamepad-button-undo-last", type=int, default=None)
+    parser.add_argument("--gamepad-button-reset", type=int, default=None)
+    parser.add_argument("--gamepad-button-stop", type=int, default=None)
     parser.add_argument("--gamepad-square-long-press-seconds", type=float, default=0.8)
 
 
@@ -319,9 +506,22 @@ def create_input_device(args, runtime):
             rot_sensitivity=args.rot_sensitivity,
         )
         return keyboard.device
-    if args.device == "gamepad":
-        return GamepadDevice(runtime, args)
-    raise Exception("Invalid device choice: choose 'keyboard' or 'gamepad'.")
+    if args.device in ("auto", "gamepad", "ps5", "xbox"):
+        pygame = import_pygame(required=args.device != "auto")
+        if pygame is not None:
+            selected_gamepad = choose_gamepad(args, pygame, args.device)
+            if selected_gamepad is not None:
+                joystick_index, profile_name = selected_gamepad
+                return GamepadDevice(runtime, args, pygame, joystick_index, profile_name)
+
+        keyboard = ManualSaveKeyboard(
+            runtime=runtime,
+            save_key=args.save_key,
+            pos_sensitivity=args.pos_sensitivity,
+            rot_sensitivity=args.rot_sensitivity,
+        )
+        return keyboard.device
+    raise Exception(f"Invalid device choice: choose one of {SUPPORTED_DEVICES}.")
 
 
 def get_source_demo(reference_demo_file, source_demo_name):
@@ -537,7 +737,11 @@ def collect_reverse_human_trajectory(
     render_teleop_frame(env, goal_overlay_frame, goal_overlay_alpha, window_title)
 
     print(f"Loaded {source_demo['source_demo_name']} final state as reverse initial state.")
-    print(f"Use keyboard teleop to restore the scene. Press '{save_key}' to save, q to discard, ESC to quit.")
+    controls_message = getattr(device, "controls_message", None)
+    if controls_message is None:
+        print(f"Use keyboard teleop to restore the scene. Press '{save_key}' to save, q to discard, ESC to quit.")
+    else:
+        print(controls_message(save_key))
     if goal_overlay_frame is not None:
         print(f"Showing official first-frame goal overlay at alpha={goal_overlay_alpha} using camera {camera_name}.")
 
@@ -591,7 +795,7 @@ def collect_reverse_human_trajectory(
                 idle_count += 1
                 continue
             recording_started = True
-            print("Started recording at the first effective keyboard input.")
+            print("Started recording at the first effective control input.")
 
         count += 1
         env.step(action)
@@ -681,7 +885,7 @@ def parse_args():
     parser.add_argument("--arm", type=str, default="right")
     parser.add_argument("--camera", type=str, default="agentview")
     parser.add_argument("--controller", type=str, default="OSC_POSE")
-    parser.add_argument("--device", type=str, default="keyboard")
+    parser.add_argument("--device", type=str, default="auto", choices=SUPPORTED_DEVICES)
     parser.add_argument("--pos-sensitivity", type=float, default=1.5)
     parser.add_argument("--rot-sensitivity", type=float, default=1.0)
     parser.add_argument(
@@ -713,8 +917,8 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.device not in ("keyboard", "gamepad"):
-        raise ValueError("collect_reverse_demo0.py currently supports --device keyboard or --device gamepad")
+    if args.device not in SUPPORTED_DEVICES:
+        raise ValueError(f"collect_reverse_demo0.py currently supports --device {SUPPORTED_DEVICES}")
     if len(args.save_key) != 1:
         raise ValueError("--save-key must be a single character")
 

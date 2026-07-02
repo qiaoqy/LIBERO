@@ -26,7 +26,7 @@ conda activate libero
 - 已将 `C:\Users\qqy\.conda\envs\libero\Lib\site-packages\mujoco\mujoco.dll` 复制到 `C:\Users\qqy\.conda\envs\libero\Lib\site-packages\robosuite\utils\mujoco.dll`。
 - 已把 `C:\Users\qqy\.conda\envs\libero\Lib\site-packages\robosuite\macros.py` 里的 `MUJOCO_GPU_RENDERING` 改成 `False`，避免 Windows 下强制使用不支持的 `egl` 后端。
 - 已安装 `pynput`，这是 `robosuite.devices.Keyboard` 需要的键盘输入依赖。
-- 已安装 `pygame==2.6.1`，这是当前自定义 `--device gamepad` 手柄遥操支持使用的输入依赖。
+- 已安装 `pygame==2.6.1`，这是当前自定义 `--device auto` / `--device gamepad` 手柄遥操支持使用的输入依赖。
 
 ## 当前渲染和 GPU 说明
 
@@ -311,7 +311,7 @@ scripts\collect_reverse_demo0.py
 - `--reference-demo-file`：官方 task 33 HDF5 路径。
 - `--source-demo-name`：默认 `demo_0`，当前先采官方 `demo_0` 的反向数据。
 - `--directory`：反向 demo 输出目录。
-- `--device`：支持 `keyboard` 或 `gamepad`。`gamepad` 通过 `pygame` 读取 PS5 / Xbox 等 SDL 能识别的手柄。
+- `--device`：支持 `auto`、`keyboard`、`gamepad`、`ps5` 或 `xbox`。默认 `auto` 会通过 `pygame` 检测手柄，优先使用 Xbox / GameSir G7 SE，其次使用 PS5；没有支持的手柄时自动回退到键盘。
 - `--camera`、`--controller`、`--pos-sensitivity`、`--rot-sensitivity`、`--window-title`：沿用当前采集参数。
 - `--save-key`：默认 `p`，用于人工确认保存。
 - `--goal-overlay-alpha`：默认 `0.3`，在遥操窗口上叠加官方首帧目标图像。
@@ -398,30 +398,42 @@ w/s/a/d/r/f -> 0.05 * pos_sensitivity
 
 随后 `input2action()` 对 OSC_POSE 控制器还会把键盘的 `dpos` 乘以 75，作为环境的平移控制 action。因此 `--pos-sensitivity` 控制的是键盘平移输入的放大倍数；数值越大，按同样的键机械臂末端平移命令越大，移动会更快，但也更容易过冲、撞物体或难以精细对齐。`--rot-sensitivity` 类似地控制旋转按键 `z/x/t/g/c/v` 的放大倍数。
 
-### PS5 / 游戏手柄遥操
+### Xbox / PS5 / 游戏手柄遥操
 
-当前已给反向采集脚本添加 `--device gamepad`。这个模式使用 `pygame` 读取手柄模拟轴，比 robosuite 自带键盘模式更连续，适合减少“按一下动一下”的离散运动。
+当前反向采集脚本默认使用 `--device auto`。启动时会通过 `pygame` 扫描手柄名称，并按 Xbox / GameSir G7 SE、PS5、键盘的优先级选择输入设备。也可以显式传 `--device xbox`、`--device ps5`、`--device gamepad` 或 `--device keyboard`。
 
-默认映射按常见 SDL / pygame PS5 手柄布局设置：
+GameSir G7 SE 在本机 Windows / pygame 下实测显示为：
+
+```text
+name='Controller (Xbox One For Windows)'
+guid='0300938d5e040000ff02000000007200'
+axes=6, buttons=16, hats=1
+```
+
+手柄模式使用 `pygame` 读取模拟轴，比 robosuite 自带键盘模式更连续，适合减少“按一下动一下”的离散运动。
+
+通用摇杆映射如下，Xbox 和 PS5 只是在按钮名称上不同：
 
 | 输入 | 动作 |
 | --- | --- |
 | 左摇杆 x / y | 末端执行器 x / y 平移；左右方向已实测正确，前后方向已按当前坐标系修正正负号 |
 | 右摇杆上 / 下 | 末端执行器上 / 下移动；上推右摇杆时机械臂向上走 |
-| 按住 `Circle` + 右摇杆上 / 下 | `OSC_POSE` 旋转 action 的 x 轴正 / 负方向 |
-| 按住 `Circle` + 右摇杆左 / 右 | `OSC_POSE` 旋转 action 的 z 轴正 / 负方向；因为 robosuite 会翻转 z，右推对应 z 负方向 |
-| 按住 `Circle` + 左摇杆左 / 右 | `OSC_POSE` 旋转 action 的 x 轴负 / 正方向；这套轴已和旧版本交换 |
-| 按住 `Circle` + 左摇杆上 / 下 | `OSC_POSE` 旋转 action 的 y 轴正 / 负方向；这套轴已和旧版本交换 |
-| `Triangle` | 切换夹爪开 / 合 |
-| `Cross` | 删除刚才保存的上一条 demo，并回到上一条重新采集 |
-| 短按 `Square` | 保存当前 episode，并震动 1 次提示 |
-| 长按 `Square` | 超过长按阈值后开始持续震动；松开 `Square` 时停止震动，丢弃当前 episode、reset 场景并自动重新开始当前编号 |
-| `Options` | reset 当前 episode，不保存并自动重新开始当前编号 |
-| `Share` | 停止整轮采集 |
+| 按住 Xbox `B` / PS5 `Circle` + 右摇杆上 / 下 | `OSC_POSE` 旋转 action 的 x 轴正 / 负方向 |
+| 按住 Xbox `B` / PS5 `Circle` + 右摇杆左 / 右 | `OSC_POSE` 旋转 action 的 z 轴正 / 负方向；因为 robosuite 会翻转 z，右推对应 z 负方向 |
+| 按住 Xbox `B` / PS5 `Circle` + 左摇杆左 / 右 | `OSC_POSE` 旋转 action 的 x 轴负 / 正方向；这套轴已和旧版本交换 |
+| 按住 Xbox `B` / PS5 `Circle` + 左摇杆上 / 下 | `OSC_POSE` 旋转 action 的 y 轴正 / 负方向；这套轴已和旧版本交换 |
+| Xbox `Y` / PS5 `Triangle` | 切换夹爪开 / 合 |
+| Xbox `A` / PS5 `Cross` | 删除刚才保存的上一条 demo，并回到上一条重新采集 |
+| 短按 Xbox `X` / PS5 `Square` | 保存当前 episode，并震动 1 次提示 |
+| 长按 Xbox `X` / PS5 `Square` | 超过长按阈值后开始持续震动；松开时停止震动，丢弃当前 episode、reset 场景并自动重新开始当前编号 |
+| Xbox `Menu` / PS5 `Options` | reset 当前 episode，不保存并自动重新开始当前编号 |
+| Xbox `View` / PS5 `Share` | 停止整轮采集 |
 
-启动时脚本会打印检测到的手柄名称、axis 数量、button 数量。如果你的 PS5 手柄在 Windows / pygame 下编号不同，可以用这些参数改映射：
+启动时脚本会打印检测到的手柄名称、profile、GUID、axis 数量、button 数量。`auto` 模式只会自动选择识别为 Xbox / PS5 的手柄；未知手柄会回退到键盘。若 Windows / pygame 下编号不同，可以用这些参数改映射：
 
 ```text
+--gamepad-index
+--gamepad-profile auto|ps5|xbox
 --gamepad-axis-left-x
 --gamepad-axis-left-y
 --gamepad-axis-right-x
@@ -429,6 +441,7 @@ w/s/a/d/r/f -> 0.05 * pos_sensitivity
 --gamepad-button-gripper
 --gamepad-button-rotate-modifier
 --gamepad-button-save-discard
+--gamepad-button-undo-last
 --gamepad-button-reset
 --gamepad-button-stop
 --gamepad-square-long-press-seconds
@@ -446,7 +459,7 @@ OpenCV viewer size: 1920x1200 (scale=1.5)
 
 手柄多轴输入按向量方式合成，不会互相阻塞。例如左摇杆推到左上 45 度时，会同时产生 x 和 y 两个方向的平移命令，机械臂沿两个方向的合成方向运动。为了避免斜向推杆比单轴推杆更快，脚本会先把 `[x, y, z]` 平移向量做长度限制：如果向量范数大于 1，就归一化到 1；旋转向量也采用同样的限幅逻辑。因此合成方向保留，但最大速度仍受原本单轴最大速度约束。
 
-没有按住 `Circle` 时，左右摇杆只负责平移，不会触发旋转；按住 `Circle` 后，左右摇杆进入旋转层，此时不会触发平移。
+没有按住 Xbox `B` / PS5 `Circle` 时，左右摇杆只负责平移，不会触发旋转；按住后，左右摇杆进入旋转层，此时不会触发平移。
 
 用手柄采 `demo_0`：
 
@@ -458,7 +471,7 @@ $env:MUJOCO_GL = "glfw"
 Remove-Item Env:\MUJOCO_EGL_DEVICE_ID -ErrorAction SilentlyContinue
 
 python scripts\collect_reverse_demo0.py `
-  --device gamepad `
+  --device auto `
   --robots Panda `
   --bddl-file libero\libero\bddl_files\libero_90\KITCHEN_SCENE6_close_the_microwave.bddl `
   --reference-demo-file data\libero_official\libero_90\KITCHEN_SCENE6_close_the_microwave_demo.hdf5 `
@@ -478,11 +491,13 @@ python scripts\collect_reverse_demo0.py `
   --window-title "LIBERO Teleop - Task 33 Reverse Demo 0 Gamepad"
 ```
 
+如果只想强制使用 GameSir G7 SE / Xbox 手柄，可以把 `--device auto` 改成 `--device xbox`；如果只想强制使用 PS5 手柄，可以改成 `--device ps5`。如果 Xbox 手柄被 pygame 报成 4 个轴而不是 6 个轴，脚本会自动把右摇杆映射切到 `2/3`；仍不正确时再用 `--gamepad-axis-right-x` / `--gamepad-axis-right-y` 手动覆盖。
+
 如果移动太慢，优先小幅提高 `--gamepad-pos-step`，例如 `0.012` 或 `0.015`；如果太冲，先降低 `--gamepad-pos-step`，不要只靠大幅改变 `--pos-sensitivity`。
 
-单条 `demo_0` 脚本和 50 条批量脚本现在行为一致：长按 `Square` 或按 `Options` 只会丢弃当前 episode，并重新打开同一个官方 source demo 的末帧场景继续采；不会直接退出脚本。只有保存成功或按 `Share` / `ESC` 停止时才会结束。
+单条 `demo_0` 脚本和 50 条批量脚本现在行为一致：长按 Xbox `X` / PS5 `Square`，或按 Xbox `Menu` / PS5 `Options`，只会丢弃当前 episode，并重新打开同一个官方 source demo 的末帧场景继续采；不会直接退出脚本。只有保存成功或按 Xbox `View` / PS5 `Share` / `ESC` 停止时才会结束。
 
-`Cross` 只在已经保存过至少一条 demo 后有意义。按下 `Cross` 会撤销刚刚保存的上一条：批量脚本会从输出 HDF5 中删除上一条 `demo_i`，更新 `num_demos` / `total`，并退回到那一条重新采集。这个操作用于“刚保存完发现上一条质量不好”的场景。
+Xbox `A` / PS5 `Cross` 只在已经保存过至少一条 demo 后有意义。按下后会撤销刚刚保存的上一条：批量脚本会从输出 HDF5 中删除上一条 `demo_i`，更新 `num_demos` / `total`，并退回到那一条重新采集。这个操作用于“刚保存完发现上一条质量不好”的场景。
 
 脚本已做过基础校验：
 
@@ -830,11 +845,11 @@ python scripts\collect_reverse_demonstrations.py `
   --window-title "LIBERO Teleop - Task 33 Reverse"
 ```
 
-如果使用 PS5 / 游戏手柄采 50 条，把 `--device keyboard` 换成 `--device gamepad`，并加入手柄参数：
+如果使用 Xbox / PS5 / 游戏手柄采 50 条，把 `--device keyboard` 换成 `--device auto`，并加入手柄参数。`auto` 会优先选择 Xbox / GameSir G7 SE，其次选择 PS5，没有支持手柄时回退到键盘：
 
 ```powershell
 python scripts\collect_reverse_demonstrations.py `
-  --device gamepad `
+  --device auto `
   --robots Panda `
   --bddl-file libero\libero\bddl_files\libero_90\KITCHEN_SCENE6_close_the_microwave.bddl `
   --reference-demo-file data\libero_official\libero_90\KITCHEN_SCENE6_close_the_microwave_demo.hdf5 `
@@ -861,8 +876,8 @@ python scripts\collect_reverse_demonstrations.py `
 按键语义：
 
 - 键盘模式下按 `p`：保存当前编号的反向 demo，并进入下一个官方 demo 编号。
-- 键盘模式下按 `q`，或手柄模式下长按 `Square` / 按 `Options`：丢弃当前 episode，重新采当前编号。
-- 键盘模式下按 `ESC`，或手柄模式下按 `Share`：停止整轮 50 条采集。
+- 键盘模式下按 `q`，或手柄模式下长按 Xbox `X` / PS5 `Square`，或按 Xbox `Menu` / PS5 `Options`：丢弃当前 episode，重新采当前编号。
+- 键盘模式下按 `ESC`，或手柄模式下按 Xbox `View` / PS5 `Share`：停止整轮 50 条采集。
 
 如果中途停止，可以用 `--output-dir` 指向已有输出目录，并加 `--resume` 继续。已经存在的 `demo_i` 会跳过：
 
